@@ -1,4 +1,7 @@
-import type { DeskItem, ItemBounds, LayoutAnalysis, WorkspacePlan } from './models'
+import type { BoundsViolation, DeskItem, ItemBounds, LayoutAnalysis, OverlapPair, WorkspacePlan } from './models'
+
+/** 设备之间允许的最小安全间距（mm） */
+export const GAP_MM = 2
 
 export function normalizeRotation(rotation: number): number {
   const normalized = rotation % 360
@@ -30,13 +33,21 @@ export function rectanglesOverlap(first: ItemBounds, second: ItemBounds): boolea
 export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
   const overlapIds = new Set<string>()
   const outOfBoundsIds = new Set<string>()
+  const boundsViolations: BoundsViolation[] = []
+  const overlapPairs: OverlapPair[] = []
   const bounds = new Map(plan.items.map((item) => [item.id, getItemBounds(item)]))
 
   plan.items.forEach((item) => {
     const itemBounds = bounds.get(item.id)
     if (!itemBounds) return
-    if (itemBounds.left < 0 || itemBounds.top < 0 || itemBounds.right > plan.deskWidthMm || itemBounds.bottom > plan.deskHeightMm) {
+    const overflows: BoundsViolation['overflows'] = []
+    if (itemBounds.left < 0) overflows.push({ edge: 'left', amountMm: -itemBounds.left })
+    if (itemBounds.top < 0) overflows.push({ edge: 'top', amountMm: -itemBounds.top })
+    if (itemBounds.right > plan.deskWidthMm) overflows.push({ edge: 'right', amountMm: itemBounds.right - plan.deskWidthMm })
+    if (itemBounds.bottom > plan.deskHeightMm) overflows.push({ edge: 'bottom', amountMm: itemBounds.bottom - plan.deskHeightMm })
+    if (overflows.length > 0) {
       outOfBoundsIds.add(item.id)
+      boundsViolations.push({ itemId: item.id, overflows, totalMm: overflows.reduce((sum, overflow) => sum + overflow.amountMm, 0) })
     }
   })
 
@@ -49,6 +60,11 @@ export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
       if (firstBounds && secondBounds && rectanglesOverlap(firstBounds, secondBounds)) {
         overlapIds.add(first.id)
         overlapIds.add(second.id)
+        const gapX = Math.min(firstBounds.right, secondBounds.right) - Math.max(firstBounds.left, secondBounds.left)
+        const gapY = Math.min(firstBounds.bottom, secondBounds.bottom) - Math.max(firstBounds.top, secondBounds.top)
+        // 最小平移向量取侵入较浅的轴向，再留 GAP_MM 的安全间距
+        const depthMm = Math.min(gapX, gapY) + GAP_MM
+        overlapPairs.push({ itemIds: [first.id, second.id], depthMm })
       }
     }
   }
@@ -60,6 +76,8 @@ export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
   return {
     overlapIds: [...overlapIds],
     outOfBoundsIds: [...outOfBoundsIds],
+    boundsViolations,
+    overlapPairs,
     coveragePercent,
     status: hasIssue ? 'attention' : 'clear',
   }

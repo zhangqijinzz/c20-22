@@ -1,4 +1,4 @@
-import { AlertTriangle, Crosshair, RotateCcw, RotateCw, Ruler, Trash2 } from 'lucide-react'
+import { AlertTriangle, Crosshair, RotateCcw, RotateCw, Ruler, Trash2, Wand2 } from 'lucide-react'
 import type { DeskItem, WorkspacePlan } from '../../../shared/models'
 import { getDeviceDefinition } from '../../../shared/models'
 
@@ -10,13 +10,14 @@ interface InspectorPanelProps {
   onUpdateItem: (id: string, patch: Partial<Pick<DeskItem, 'widthMm' | 'heightMm' | 'x' | 'y'>>) => void
   onRotate: (id: string, delta: number) => void
   onDelete: (id: string) => void
+  onRepairItem?: (id: string) => void
 }
 
 function NumericField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return <label className="numeric-field"><span>{label}</span><input type="number" value={value} min={40} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} /><em>mm</em></label>
 }
 
-export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateItem, onRotate, onDelete }: InspectorPanelProps) {
+export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateItem, onRotate, onDelete, onRepairItem }: InspectorPanelProps) {
   const isIssue = item ? issueIds.includes(item.id) : false
   const definition = item ? getDeviceDefinition(item.type) : null
   return (
@@ -36,7 +37,15 @@ export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateIte
       {item && definition ? (
         <div className="item-editor">
           <div className="selected-item-heading"><span className="selected-swatch" style={{ backgroundColor: definition.color }} /> <div><strong>{definition.label}</strong><small>{definition.hint}</small></div><span className="item-code">{definition.shortLabel}</span></div>
-          {isIssue && <div className="issue-callout"><AlertTriangle size={16} /><span>设备与其他元素重叠或超出桌面边界</span></div>}
+          {isIssue && (
+            <div className="issue-callout">
+              <AlertTriangle size={16} />
+              <span className="issue-callout-copy">
+                这件设备存在检查问题，详见下方检查明细。
+                {onRepairItem && <button className="callout-repair" type="button" onClick={() => onRepairItem(item.id)}><Wand2 size={12} /> 按最小移动量修复这一件</button>}
+              </span>
+            </div>
+          )}
           <div className="field-heading"><span>实际尺寸</span><span className="unit-label">单位：毫米</span></div>
           <div className="two-column-fields">
             <NumericField label="宽度" value={item.widthMm} onChange={(value) => onUpdateItem(item.id, { widthMm: value })} />
@@ -51,8 +60,9 @@ export function InspectorPanel({ plan, item, issueIds, onUpdateDesk, onUpdateIte
           <button className="remove-item-button" onClick={() => onDelete(item.id)} type="button"><Trash2 size={15} /> 移除这个设备</button>
         </div>
       ) : (
-        <div className="empty-inspector"><span className="empty-illustration">⌖</span><strong>选择一个设备</strong><p>点击画布上的设备查看尺寸、位置和旋转控制。</p></div>
+        <div className="empty-inspector"><span className="empty-illustration">⌖</span><strong>选择一个设备</strong><p>点击画布设备或下方检查明细，查看尺寸、位置和旋转控制。</p></div>
       )}
     </aside>
   )
 }
+

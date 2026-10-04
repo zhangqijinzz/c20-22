@@ -36,9 +36,25 @@ export interface ItemBounds {
   height: number
 }
 
+export interface BoundsViolation {
+  itemId: string
+  /** 每条边最多一项：左、上为负向越界量，右、下为正向越界量，单位 mm */
+  overflows: Array<{ edge: 'left' | 'top' | 'right' | 'bottom'; amountMm: number }>
+  totalMm: number
+}
+
+export interface OverlapPair {
+  /** 按 plan.items 中出现先后排序的两个设备 id */
+  itemIds: [string, string]
+  /** 按最小平移量分开时，需要移动的距离（mm） */
+  depthMm: number
+}
+
 export interface LayoutAnalysis {
   overlapIds: string[]
   outOfBoundsIds: string[]
+  boundsViolations: BoundsViolation[]
+  overlapPairs: OverlapPair[]
   coveragePercent: number
   status: 'clear' | 'attention'
 }

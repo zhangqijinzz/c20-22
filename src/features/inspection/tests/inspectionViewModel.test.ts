@@ -11,4 +11,29 @@ describe('inspection module', () => {
     expect(result.issueCount).toBe(2)
     expect(result.issueIds).toEqual(expect.arrayContaining([first.id, second.id]))
   })
+
+  it('lists each problematic device with the device it overlaps and overflow edges', () => {
+    const plan = createPlan('明细', false)
+    const monitor = { ...createItem('monitor'), x: -30, y: 0 }
+    const keyboard = { ...createItem('keyboard'), x: 100, y: 50 }
+    const lamp = { ...createItem('lamp'), x: 1500, y: 700 }
+    const result = inspectPlan({ ...plan, items: [monitor, keyboard, lamp] })
+
+    const monitorIssue = result.issues.find((issue) => issue.itemId === monitor.id)
+    expect(monitorIssue?.kind).toBe('both')
+    expect(monitorIssue?.overflows.map((overflow) => overflow.edge)).toContain('left')
+    expect(monitorIssue?.overlaps[0].otherItemId).toBe(keyboard.id)
+
+    const lampIssue = result.issues.find((issue) => issue.itemId === lamp.id)
+    expect(lampIssue?.kind).toBe('outOfBounds')
+    expect(lampIssue?.overflows.map((overflow) => overflow.edge).sort()).toEqual(['bottom', 'right'])
+  })
+
+  it('keeps the detail list in canvas order', () => {
+    const plan = createPlan('顺序', false)
+    const a = { ...createItem('lamp'), x: -20, y: 0 }
+    const b = { ...createItem('lamp'), x: 1600, y: 0 }
+    const result = inspectPlan({ ...plan, items: [a, b] })
+    expect(result.issues.map((issue) => issue.itemId)).toEqual([a.id, b.id])
+  })
 })
