@@ -14,6 +14,8 @@ import { clampDeskSize, clampItemDimension } from '../../shared/layoutRules'
 import { moveCanvasItem, rotateCanvasItem } from '../canvas/canvasViewModel'
 import { createMaterialDraft } from '../materials/materialsViewModel'
 import { inspectPlan } from '../inspection/inspectionViewModel'
+import { autoFixLayout } from '../inspection/inspectionFixer'
+import { buildFixReport, type FixRoundReport } from '../inspection/inspectionReport'
 import { LocalWorkspaceRepository, type WorkspaceRepository } from './workspaceRepository'
 
 export interface WorkspaceViewModel {
@@ -24,6 +26,7 @@ export interface WorkspaceViewModel {
   analysis: LayoutAnalysis
   issueIds: string[]
   issueCount: number
+  fixReport: FixRoundReport | null
   feedback: string
   isPreviewOpen: boolean
   selectItem: (id: string | null) => void
@@ -33,6 +36,9 @@ export interface WorkspaceViewModel {
   rotateItem: (id: string, delta: number) => void
   updateItem: (id: string, patch: Partial<Pick<DeskItem, 'widthMm' | 'heightMm' | 'x' | 'y'>>) => void
   updateDesk: (field: 'deskWidthMm' | 'deskHeightMm', value: number) => void
+  autoFixItem: (id: string) => void
+  autoFixAll: () => void
+  dismissFixReport: () => void
   createNewPlan: () => void
   duplicatePlan: () => void
   selectPlan: (id: string) => void
@@ -41,7 +47,7 @@ export interface WorkspaceViewModel {
   closePreview: () => void
 }
 
-const emptyInspection = { analysis: { overlapIds: [], outOfBoundsIds: [], coveragePercent: 0, status: 'clear' as const }, issueIds: [], issueCount: 0 }
+const emptyInspection = { analysis: { overlapIds: [], outOfBoundsIds: [], entries: [], coveragePercent: 0, status: 'clear' as const }, entries: [], issueIds: [], issueCount: 0 }
 
 export function useWorkspaceViewModel(repository?: WorkspaceRepository): WorkspaceViewModel {
   const repositoryRef = useRef(repository ?? new LocalWorkspaceRepository())
@@ -50,6 +56,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [feedback, setFeedback] = useState('正在准备你的工作台…')
+  const [fixReport, setFixReport] = useState<FixRoundReport | null>(null)
 
   useEffect(() => {
     let active = true
@@ -98,27 +105,52 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
 
   const selectItem = useCallback((id: string | null) => setSelectedItemId(id), [])
 
+  const applyFix = useCallback((itemId?: string) => {
+    if (!document || !activePlan) return
+    const scope = itemId ? 'one' as const : 'all' as const
+    const result = autoFixLayout(activePlan, itemId)
+    const report = buildFixReport(result, result.items, scope)
+    setFixReport(report)
+    if (report.attemptedCount === 0) {
+      setFeedback('当前没有需要修复的问题')
+      return
+    }
+    const nextPlan = { ...activePlan, items: result.items, updatedAt: new Date().toISOString() }
+    const nextDocument = { ...document, plans: document.plans.map((plan) => plan.id === nextPlan.id ? nextPlan : plan) }
+    void persist(nextDocument, report.remainingCount === 0 ? '自动修复完成，复检已通过' : '自动修复已执行，但仍有问题未解决')
+    if (itemId) setSelectedItemId(itemId)
+  }, [activePlan, document, persist])
+
+  const autoFixItem = useCallback((id: string) => applyFix(id), [applyFix])
+  const autoFixAll = useCallback(() => applyFix(undefined), [applyFix])
+  const dismissFixReport = useCallback(() => setFixReport(null), [])
+
   const addItem = useCallback((type: DeviceType) => {
     if (!activePlan) return
     const draft = createMaterialDraft(type, activePlan.items.length)
+    setFixReport(null)
     updateActivePlan((plan) => ({ ...plan, items: [...plan.items, draft.item] }), draft.feedback)
     setSelectedItemId(draft.item.id)
   }, [activePlan, updateActivePlan])
 
   const removeItem = useCallback((id: string) => {
+    setFixReport(null)
     updateActivePlan((plan) => ({ ...plan, items: plan.items.filter((item) => item.id !== id) }), '设备已移除')
     setSelectedItemId((current) => current === id ? null : current)
   }, [updateActivePlan])
 
   const moveItem = useCallback((id: string, x: number, y: number) => {
+    setFixReport(null)
     updateActivePlan((plan) => ({ ...plan, items: moveCanvasItem(plan.items, id, x, y) }), '位置已更新')
   }, [updateActivePlan])
 
   const rotateItem = useCallback((id: string, delta: number) => {
+    setFixReport(null)
     updateActivePlan((plan) => ({ ...plan, items: rotateCanvasItem(plan.items, id, delta) }), '角度已更新')
   }, [updateActivePlan])
 
   const updateItem = useCallback((id: string, patch: Partial<Pick<DeskItem, 'widthMm' | 'heightMm' | 'x' | 'y'>>) => {
+    setFixReport(null)
     updateActivePlan((plan) => ({
       ...plan,
       items: plan.items.map((item) => item.id === id ? {
@@ -132,12 +164,14 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
 
   const updateDesk = useCallback((field: 'deskWidthMm' | 'deskHeightMm', value: number) => {
     if (!activePlan) return
+    setFixReport(null)
     updateActivePlan((plan) => ({ ...plan, [field]: clampDeskSize(value, plan[field]) }), '桌面尺寸已更新')
   }, [activePlan, updateActivePlan])
 
   const createNewPlan = useCallback(() => {
     if (!document) return
     const plan = createPlan(`工作台 ${document.plans.length + 1}`, false)
+    setFixReport(null)
     void persist({ ...document, plans: [...document.plans, plan], activePlanId: plan.id }, '已创建空白方案')
     setSelectedItemId(null)
   }, [document, persist])
@@ -153,12 +187,14 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     }
     void persist({ ...document, plans: [...document.plans, copy], activePlanId: copy.id }, '方案已复制')
     setSelectedItemId(null)
+    setFixReport(null)
   }, [activePlan, document, persist])
 
   const selectPlan = useCallback((id: string) => {
     if (!document || !document.plans.some((plan) => plan.id === id)) return
     void persist({ ...document, activePlanId: id }, '已切换方案')
     setSelectedItemId(null)
+    setFixReport(null)
   }, [document, persist])
 
   const deleteCurrentPlan = useCallback(() => {
@@ -169,6 +205,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     const remaining = document.plans.filter((plan) => plan.id !== activePlan.id)
     void persist({ ...document, plans: remaining, activePlanId: remaining[0].id }, '方案已删除')
     setSelectedItemId(null)
+    setFixReport(null)
   }, [activePlan, document, persist])
 
   const openPreview = useCallback(() => setIsPreviewOpen(true), [])
@@ -182,6 +219,7 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     analysis,
     issueIds,
     issueCount,
+    fixReport,
     feedback,
     isPreviewOpen,
     selectItem,
@@ -191,6 +229,9 @@ export function useWorkspaceViewModel(repository?: WorkspaceRepository): Workspa
     rotateItem,
     updateItem,
     updateDesk,
+    autoFixItem,
+    autoFixAll,
+    dismissFixReport,
     createNewPlan,
     duplicatePlan,
     selectPlan,

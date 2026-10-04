@@ -1,4 +1,4 @@
-import type { DeskItem, ItemBounds, LayoutAnalysis, WorkspacePlan } from './models'
+import type { DeskItem, IssueEntry, ItemBounds, LayoutAnalysis, OverflowDetail, OverlapDetail, WorkspacePlan } from './models'
 
 export function normalizeRotation(rotation: number): number {
   const normalized = rotation % 360
@@ -27,16 +27,34 @@ export function rectanglesOverlap(first: ItemBounds, second: ItemBounds): boolea
   return horizontal > 1 && vertical > 1
 }
 
+/** 毫米以下的偏差视为制造容差，不报告为问题 */
+export const BOUNDS_TOLERANCE_MM = 0.5
+
 export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
-  const overlapIds = new Set<string>()
-  const outOfBoundsIds = new Set<string>()
   const bounds = new Map(plan.items.map((item) => [item.id, getItemBounds(item)]))
+  const entries = new Map<string, IssueEntry>()
+
+  const entryFor = (item: DeskItem): IssueEntry => {
+    let entry = entries.get(item.id)
+    if (!entry) {
+      entry = { itemId: item.id, itemType: item.type, kinds: [], overlaps: [], overflows: [] }
+      entries.set(item.id, entry)
+    }
+    return entry
+  }
 
   plan.items.forEach((item) => {
     const itemBounds = bounds.get(item.id)
     if (!itemBounds) return
-    if (itemBounds.left < 0 || itemBounds.top < 0 || itemBounds.right > plan.deskWidthMm || itemBounds.bottom > plan.deskHeightMm) {
-      outOfBoundsIds.add(item.id)
+    const overflows: OverflowDetail[] = []
+    if (itemBounds.left < -BOUNDS_TOLERANCE_MM) overflows.push({ side: 'left', amountMm: -itemBounds.left })
+    if (itemBounds.top < -BOUNDS_TOLERANCE_MM) overflows.push({ side: 'top', amountMm: -itemBounds.top })
+    if (itemBounds.right > plan.deskWidthMm + BOUNDS_TOLERANCE_MM) overflows.push({ side: 'right', amountMm: itemBounds.right - plan.deskWidthMm })
+    if (itemBounds.bottom > plan.deskHeightMm + BOUNDS_TOLERANCE_MM) overflows.push({ side: 'bottom', amountMm: itemBounds.bottom - plan.deskHeightMm })
+    if (overflows.length > 0) {
+      const entry = entryFor(item)
+      entry.kinds.push('outOfBounds')
+      entry.overflows.push(...overflows)
     }
   })
 
@@ -46,20 +64,45 @@ export function analyzeLayout(plan: WorkspacePlan): LayoutAnalysis {
       const second = plan.items[nextIndex]
       const firstBounds = bounds.get(first.id)
       const secondBounds = bounds.get(second.id)
-      if (firstBounds && secondBounds && rectanglesOverlap(firstBounds, secondBounds)) {
-        overlapIds.add(first.id)
-        overlapIds.add(second.id)
-      }
+      if (!firstBounds || !secondBounds || !rectanglesOverlap(firstBounds, secondBounds)) continue
+      const overlapX = Math.min(firstBounds.right, secondBounds.right) - Math.max(firstBounds.left, secondBounds.left)
+      const overlapY = Math.min(firstBounds.bottom, secondBounds.bottom) - Math.max(firstBounds.top, secondBounds.top)
+      const firstEntry = entryFor(first)
+      firstEntry.kinds.push('overlap')
+      firstEntry.overlaps.push({ otherId: second.id, otherType: second.type, overlapXMm: overlapX, overlapYMm: overlapY })
+      const secondEntry = entryFor(second)
+      secondEntry.kinds.push('overlap')
+      secondEntry.overlaps.push({ otherId: first.id, otherType: first.type, overlapXMm: overlapX, overlapYMm: overlapY })
     }
   }
+
+  const issueSeverity = (entry: IssueEntry): number => Math.max(
+    0,
+    ...entry.overflows.map((overflow) => overflow.amountMm),
+    ...entry.overlaps.map((overlap) => Math.min(overlap.overlapXMm, overlap.overlapYMm)),
+  )
+  const sortedEntries = [...entries.values()].sort((left, right) => {
+    const leftOutOfBounds = left.kinds.includes('outOfBounds') ? 0 : 1
+    const rightOutOfBounds = right.kinds.includes('outOfBounds') ? 0 : 1
+    if (leftOutOfBounds !== rightOutOfBounds) return leftOutOfBounds - rightOutOfBounds
+    return issueSeverity(right) - issueSeverity(left)
+  })
+
+  const overlapIds = new Set<string>()
+  const outOfBoundsIds = new Set<string>()
+  sortedEntries.forEach((entry) => {
+    if (entry.kinds.includes('overlap')) overlapIds.add(entry.itemId)
+    if (entry.kinds.includes('outOfBounds')) outOfBoundsIds.add(entry.itemId)
+  })
 
   const occupiedArea = plan.items.reduce((total, item) => total + item.widthMm * item.heightMm, 0)
   const deskArea = plan.deskWidthMm * plan.deskHeightMm
   const coveragePercent = Math.min(100, Math.round((occupiedArea / deskArea) * 100))
-  const hasIssue = overlapIds.size > 0 || outOfBoundsIds.size > 0
+  const hasIssue = sortedEntries.length > 0
   return {
     overlapIds: [...overlapIds],
     outOfBoundsIds: [...outOfBoundsIds],
+    entries: sortedEntries,
     coveragePercent,
     status: hasIssue ? 'attention' : 'clear',
   }

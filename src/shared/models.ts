@@ -36,9 +36,39 @@ export interface ItemBounds {
   height: number
 }
 
+export type OverflowSide = 'left' | 'top' | 'right' | 'bottom'
+
+export interface OverflowDetail {
+  side: OverflowSide
+  /** 越过桌面边缘的毫米数 */
+  amountMm: number
+}
+
+export interface OverlapDetail {
+  /** 与其重叠的另一件设备 */
+  otherId: string
+  otherType: DeviceType
+  /** 沿 X / Y 轴的压入深度（毫米） */
+  overlapXMm: number
+  overlapYMm: number
+}
+
+export type IssueKind = 'overlap' | 'outOfBounds'
+
+export interface IssueEntry {
+  itemId: string
+  itemType: DeviceType
+  /** 一件设备可能同时存在多条重叠、同时重叠又越界 */
+  kinds: IssueKind[]
+  overlaps: OverlapDetail[]
+  overflows: OverflowDetail[]
+}
+
 export interface LayoutAnalysis {
   overlapIds: string[]
   outOfBoundsIds: string[]
+  /** 每件问题设备的明细，按越界优先、重叠其次排序 */
+  entries: IssueEntry[]
   coveragePercent: number
   status: 'clear' | 'attention'
 }
